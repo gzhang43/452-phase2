@@ -4,10 +4,10 @@
 
 typedef struct PCB {
     int pid;
-    char name[MAXNAME]
+    char name[MAXNAME];
     int priority;
-    int filled;
     int isBlocked;
+    int filled;
 } PCB;
 
 typedef struct Message {
