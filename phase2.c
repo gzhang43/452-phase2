@@ -1,6 +1,16 @@
 #include <stdio.h>
 #include "phase2.h"
 
+typedef struct PCB {
+    int pid;
+    char name[MAXNAME]
+    int priority;
+    int filled;
+    int isBlocked;
+} PCB;
+
+struct PCB shadowProcessTable[MAXPROC+1];
+
 void phase2_init(void) {
 
 }
