@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <usloss.h>
 #include "phase2.h"
 
 typedef struct PCB {
@@ -9,10 +10,27 @@ typedef struct PCB {
     int isBlocked;
 } PCB;
 
+typedef struct Message {
+    int text[MAX_MESSAGE];
+} Message;
+
+typedef struct Mailbox {
+    int id;
+    int numSlots;
+    int slotSize;
+    struct Message* messages;
+    int filled;
+} Mailbox;
+
+struct Mailbox mailboxes[MAXMBOX];
+struct Message mailSlots[MAXSLOTS]; 
 struct PCB shadowProcessTable[MAXPROC+1];
 
-void phase2_init(void) {
+int numMailboxes;
+int lastAssignedId;
 
+void phase2_init(void) {
+    
 }
 
 void phase2_start_service_processes(void) {
@@ -27,8 +45,42 @@ void phase2_clockHandler(void) {
 
 }
 
-int MboxCreate(int slots, int slot_size) {
+/*
+Returns the next available Mailbox id. The id is the index of the mailbox
+in the array of mailboxes, and ids can be reused once a mailbox is destroyed.
+*/
+int getNextMailboxId() {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+    int nextId = lastAssignedId + 1;
+    while (mailboxes[nextId % MAXMBOX].filled == 1) {
+        nextId++;
+    }
+    return nextId % MAXMBOX;
+}
 
+/*
+Returns 1 if a mailbox can be created, and 0 if it cannot because the 
+maximum number of mailboxes has been reached.
+*/
+int mailboxAvail() {
+    return numMailboxes < MAXMBOX;
+}
+
+int MboxCreate(int slots, int slot_size) {
+    if (slots < 0 || slots > MAXSLOTS || !mailboxAvail()) {
+        return -1;
+    }
+    int id = getNextMailboxId(); 
+    Mailbox* mailbox = &mailboxes[id];
+
+    mailbox->id = id;
+    mailbox->numSlots = slots;
+    mailbox->slotSize = slot_size; 
+
+    return id;   
 }
 
 int MboxRelease(int mbox_id) {
