@@ -11,7 +11,9 @@ typedef struct PCB {
 } PCB;
 
 typedef struct Message {
+    int mailboxId;
     int text[MAX_MESSAGE];
+    int filled;
 } Message;
 
 typedef struct Mailbox {
@@ -30,7 +32,23 @@ int numMailboxes;
 int lastAssignedId;
 
 void phase2_init(void) {
-    
+    if (USLOSS_PsrGet() % 2 == 0){
+	USLOSS_Console("Process is not in kernel mode.\n");
+	USLOSS_Halt(1);
+    }
+
+    for (int i = 0; i < MAXPROC; i++){
+	shadowProcessTable[i].filled = 0;
+    } 
+    for (int i = 0; i < MAXMBOX; i++){
+	mailboxes[i].filled = 0;
+    }
+     for (int i = 0; i < MAXSLOTS; i++){
+	mailSlots[i].filled = 0;
+    }
+
+    numMailboxes = 0;
+    lastAssignedId = 0;
 }
 
 void phase2_start_service_processes(void) {
