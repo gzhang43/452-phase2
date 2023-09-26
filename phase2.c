@@ -1,18 +1,22 @@
 #include <stdio.h>
 #include <usloss.h>
+#include "phase1.h"
 #include "phase2.h"
+
+void diskHandler(int dev, void *arg);
+void termHandler(int dev, void *arg);
 
 typedef struct PCB {
     int pid;
-    char name[MAXNAME]
+    char name[MAXNAME];
     int priority;
-    int filled;
     int isBlocked;
+    int filled;
 } PCB;
 
 typedef struct Message {
     int mailboxId;
-    int text[MAX_MESSAGE];
+    char text[MAX_MESSAGE];
     int filled;
 } Message;
 
@@ -32,23 +36,34 @@ int numMailboxes;
 int lastAssignedId;
 
 void phase2_init(void) {
-    if (USLOSS_PsrGet() % 2 == 0){
+    if (USLOSS_PsrGet() % 2 == 0) {
 	USLOSS_Console("Process is not in kernel mode.\n");
 	USLOSS_Halt(1);
     }
 
-    for (int i = 0; i < MAXPROC; i++){
+    USLOSS_IntVec[USLOSS_DISK_INT] = diskHandler;    
+    USLOSS_IntVec[USLOSS_TERM_INT] = termHandler;    
+
+    for (int i = 0; i < MAXPROC; i++) {
 	shadowProcessTable[i].filled = 0;
     } 
-    for (int i = 0; i < MAXMBOX; i++){
-	mailboxes[i].filled = 0;
+    for (int i = 0; i < MAXMBOX; i++) {
+        mailboxes[i].filled = 0;
     }
-     for (int i = 0; i < MAXSLOTS; i++){
+    for (int i = 0; i < MAXSLOTS; i++) {
 	mailSlots[i].filled = 0;
     }
 
     numMailboxes = 0;
-    lastAssignedId = 0;
+    lastAssignedId = -1;
+    
+    MboxCreate(1, 4); 
+    MboxCreate(1, 4); 
+    MboxCreate(1, 4); 
+    MboxCreate(1, 4); 
+    MboxCreate(1, 4); 
+    MboxCreate(1, 4); 
+    MboxCreate(1, 4); 
 }
 
 void phase2_start_service_processes(void) {
@@ -98,6 +113,8 @@ int MboxCreate(int slots, int slot_size) {
     mailbox->numSlots = slots;
     mailbox->slotSize = slot_size; 
 
+    lastAssignedId = id;
+    numMailboxes++;
     return id;   
 }
 
@@ -129,7 +146,13 @@ void wakeupByDevice(int type, int unit, int status) {
 
 }
 
+void diskHandler(int dev, void *arg) {
+    int unitNo = (int)(long)arg;
+}
 
+void termHandler(int dev, void *arg) {
+    int unitNo = (int)(long)arg;
+}
 
 
 
