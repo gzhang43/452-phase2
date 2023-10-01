@@ -12,6 +12,7 @@ typedef struct PCB {
     char name[MAXNAME];
     int priority;
     int isBlocked;
+    struct PCB* nextInQueue;
     int filled;
 } PCB;
 
@@ -30,6 +31,9 @@ typedef struct Mailbox {
     struct Message* messages;
     struct PCB* consumers;
     struct PCB* producers;
+    int consumerQueued;
+    int producerQueued;
+    int released;
     int filled;
 } Mailbox;
 
@@ -123,7 +127,8 @@ int mailboxAvail() {
 }
 
 int MboxCreate(int slots, int slot_size) {
-    if (slots < 0 || slots > MAXSLOTS || !mailboxAvail()) {
+    if (slots < 0 || slots > MAXSLOTS || slot_size < 0 || 
+            slot_size > MAX_MESSAGE || !mailboxAvail()) {
         return -1;
     }
     int id = getNextMailboxId(); 
@@ -132,6 +137,7 @@ int MboxCreate(int slots, int slot_size) {
     mailbox->id = id;
     mailbox->numSlots = slots;
     mailbox->slotSize = slot_size; 
+    mailbox->filled = 1;
 
     lastAssignedId = id;
     numMailboxes++;
@@ -142,19 +148,61 @@ int MboxRelease(int mbox_id) {
 
 }
 
+void addMessageToMailbox(struct Message* slot, struct Message* messages) {
+    struct Message* temp = messages;
+    while (messages->nextMessage != NULL) {
+        temp = temp->nextMessage;
+    }
+    temp->nextMessage = slot;
+}
+
+void addProcessToEndOfQueue(int pid, struct PCB* queue) {
+    struct PCB *process = &shadowProcessTable[pid % MAXPROC];
+   
+    struct PCB* temp = queue;
+    while (temp->nextInQueue != NULL) {
+        temp = temp->nextInQueue;
+    }
+    temp->nextInQueue = process;
+} 
+
 int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
+    if (mailboxes[mbox_id].released == 1) {
+        return -3;
+    } 
     if (numMailboxSlots >= MAXSLOTS) {
         return -2;
     }
-    // TODO: Check illegal argument values and if mailvox was released
-    // TODO: Block if there is no space in the mailbox
-    // TODO: Add message slots to linked list
+    if (mailboxes[mbox_id].filled == 0 || (msg_size > 0 && msg_ptr == NULL) ||
+            msg_size > mailboxes[mbox_id].slotSize) {
+        return -1;
+    }
 
-    if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots) {
+    if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots &&
+            mailboxes[mbox_id].consumerQueued == 0) {
         Message* slot = &mailSlots[getNextSlot()];
         strcpy(slot->text, msg_ptr);
-        mailboxes[mbox_id].messages = slot;
+
+        if (mailboxes[mbox_id].messages == NULL) {
+            mailboxes[mbox_id].messages = slot;
+        }
+        else {
+            addMessageToMailbox(slot, mailboxes[mbox_id].messages);
+        }
+        if (mailboxes[mbox_id].consumers != NULL) {
+            unblockProc(mailboxes[mbox_id].consumers->pid);
+        }
         return 0;
+    }
+    else {
+        if (mailboxes[mbox_id].producers == NULL) {
+            mailboxes[mbox_id].producers = &shadowProcessTable[getpid() % 
+                MAXPROC];
+        }
+	else {
+            addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].producers);
+        }
+        blockMe(13);
     }
 }
 
