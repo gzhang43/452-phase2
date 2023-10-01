@@ -30,6 +30,7 @@ typedef struct Mailbox {
     struct Message* messages;
     struct PCB* consumers;
     struct PCB* producers;
+    int released;
     int filled;
 } Mailbox;
 
@@ -163,9 +164,14 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 }
 
 int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    if (mailboxes[mbox_id].released == 1 || mailboxes[mbox_id].filled == 0){
+	return -3;
+    }
     //if (mailboxes[mbox_id].numSlotsUsed > 0) {
         Message* slot = mailboxes[mbox_id].messages;
-        strcpy(msg_ptr, slot->text);
+	if (strlen(slot->text) < msg_max_size){
+            strcpy(msg_ptr, slot->text);
+	}
     //}
     return strlen(msg_ptr) + 1;
 }
