@@ -190,6 +190,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
             addMessageToMailbox(slot, mailboxes[mbox_id].messages);
         }
 	mailboxes[mbox_id].numSlotsUsed += 1;
+
         if (mailboxes[mbox_id].consumers != NULL) {
             unblockProc(mailboxes[mbox_id].consumers->pid);
         }
@@ -204,7 +205,12 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
             addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].producers);
         }
         blockMe(13);
+        // TODO: Send message once unblocked
     }
+}
+
+int MboxSendHelper(int mbox_id, void *msg_ptr) {
+
 }
 
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
@@ -212,22 +218,24 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 }
 
 int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
-    if (mailboxes[mbox_id].released == 1){
+    if (mailboxes[mbox_id].released == 1) {
 	return -3;
     }
-    if (mailboxes[mbox_id].filled == 0){
+    if (mailboxes[mbox_id].filled == 0) {
 	return -1;
     }
-    if (mailboxes[mbox_id].numSlotsUsed > 0 && mailboxes[mbox_id].producerQueued == 0) {
+    if (mailboxes[mbox_id].numSlotsUsed > 0 && 
+            mailboxes[mbox_id].producerQueued == 0) {
         Message* slot = mailboxes[mbox_id].messages;
 
-	if (strlen(slot->text) > msg_max_size){
+	if (strlen(slot->text) > msg_max_size) {
 	    return -1;
 	}
 	
         strcpy(msg_ptr, slot->text);
 	mailboxes[mbox_id].messages = slot->nextMessage;
 	mailboxes[mbox_id].numSlotsUsed -= 1;
+        // TODO: unblock process at the head of producer queue
     }
     else {
 	if (mailboxes[mbox_id].consumers == NULL) {
@@ -238,9 +246,10 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
             addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].consumers);
         }
 	blockMe(14);
+
 	Message* slot = mailboxes[mbox_id].messages;
 
-	if (strlen(slot->text) > msg_max_size){
+	if (strlen(slot->text) > msg_max_size) {
 	    return -1;
 	}
 	
@@ -248,12 +257,16 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 	mailboxes[mbox_id].messages = slot->nextMessage;
 	mailboxes[mbox_id].numSlotsUsed -= 1;
 
-	if (mailboxes[mbox_id].consumers != NULL && mailboxes[mbox_id].messages != NULL){
+	if (mailboxes[mbox_id].consumers != NULL && 
+                mailboxes[mbox_id].messages != NULL) {
 	    unblockProc(mailboxes[mbox_id].consumers->pid);
 	}	
     }
-
     return strlen(msg_ptr) + 1;
+}
+
+int MboxRecvHelper(int mbox_id, void *msg_ptr) {
+
 }
 
 int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
