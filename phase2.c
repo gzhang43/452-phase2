@@ -143,7 +143,25 @@ int MboxCreate(int slots, int slot_size) {
 }
 
 int MboxRelease(int mbox_id) {
+    if (mailboxes[mbox_id].filled == 0) {
+        return -1;
+    }
+    mailboxes[mbox_id].released = 1;
 
+    Message* messages = mailboxes[mbox_id].messages;
+    while (messages != NULL) {
+        messages->filled = 0;
+        messages = messages->nextMessage;
+    }
+
+    if (mailboxes[mbox_id].producers != NULL) {
+        unblockProc(mailboxes[mbox_id].producers->pid);
+    }
+
+    if (mailboxes[mbox_id].consumers != NULL) {
+        unblockProc(mailboxes[mbox_id].consumers->pid);
+    }
+    return 0;
 }
 
 void addMessageToMailbox(struct Message* slot, struct Message* messages) {
@@ -189,7 +207,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
         else {
             addMessageToMailbox(slot, mailboxes[mbox_id].messages);
         }
-	mailboxes[mbox_id].numSlotsUsed += 1;
+	    mailboxes[mbox_id].numSlotsUsed += 1;
 
         // Unblock process at head of consumer queue
         if (mailboxes[mbox_id].consumers != NULL) {
@@ -204,15 +222,67 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
             mailboxes[mbox_id].producers = &shadowProcessTable[getpid() % 
                 MAXPROC];
         }
-	else {
+	    else {
             addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].producers);
         }
         blockMe(13);
 
-        // Write message to slot once unblocked and unblock next producer if
-        // applicable
+        if (mailboxes[mbox_id].released == 1) {
+            mailboxes[mbox_id].producers = mailboxes[mbox_id].producers->nextInQueue;
+            if (mailboxes[mbox_id].producers != NULL) {
+                unblockProc(mailboxes[mbox_id].producers->pid);
+            }
+            else {
+                mailboxes[mbox_id].filled = 0;
+            }
+            return -3;
+        }
+
+        if (mailboxes[mbox_id].numSlots > 0) {
+
+            // Write message to slot once unblocked and unblock next producer if
+            // applicable
+            Message* slot = &mailSlots[getNextSlot()];
+            strcpy(slot->text, msg_ptr);
+            slot->filled = 1;
+            lastAssignedSlot++;
+
+            if (mailboxes[mbox_id].messages == NULL) {
+                mailboxes[mbox_id].messages = slot;
+            }
+            else {
+                addMessageToMailbox(slot, mailboxes[mbox_id].messages);
+            }
+            mailboxes[mbox_id].numSlotsUsed += 1;
+
+            if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots &&
+                mailboxes[mbox_id].producerQueued == 1) {
+                unblockProc(mailboxes[mbox_id].producers->pid);
+            }
+        }
+        return 0;
+    }
+}
+
+int MboxSendHelper(int mbox_id, void *msg_ptr) {
+
+}
+
+int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
+    if (mailboxes[mbox_id].released == 1) {
+        return -3;
+    }
+    if (numMailboxSlots >= MAXSLOTS) {
+        return -2;
+    }
+    if (mailboxes[mbox_id].filled == 0 || (msg_size > 0 && msg_ptr == NULL) ||
+        msg_size > mailboxes[mbox_id].slotSize) {
+        return -1;
+    }
+
+    if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots) {
         Message* slot = &mailSlots[getNextSlot()];
-        strcpy(slot->text, msg_ptr); 
+        strcpy(slot->text, msg_ptr);
         slot->filled = 1;
         lastAssignedSlot++;
 
@@ -224,20 +294,17 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
         }
         mailboxes[mbox_id].numSlotsUsed += 1;
 
-        if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots &&
-                mailboxes[mbox_id].producerQueued == 1) {
-            unblockProc(mailboxes[mbox_id].producers->pid);
+        // Unblock process at head of consumer queue
+        if (mailboxes[mbox_id].consumers != NULL) {
+            unblockProc(mailboxes[mbox_id].consumers->pid);
+            mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
         }
+
         return 0;
     }
-}
-
-int MboxSendHelper(int mbox_id, void *msg_ptr) {
-
-}
-
-int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
-
+    else {
+        return -2;
+    }
 }
 
 int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
@@ -268,14 +335,25 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
     }
     else {
         shadowProcessTable[getpid() % MAXPROC].pid = getpid();
-	if (mailboxes[mbox_id].consumers == NULL) {
+	    if (mailboxes[mbox_id].consumers == NULL) {
             mailboxes[mbox_id].consumers = &shadowProcessTable[getpid() % 
                 MAXPROC];
         }
-	else {
+	    else {
             addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].consumers);
         }
-	blockMe(14);
+	    blockMe(14);
+
+    if (mailboxes[mbox_id].released == 1) {
+        mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
+        if (mailboxes[mbox_id].consumers != NULL) {
+            unblockProc(mailboxes[mbox_id].consumers->pid);
+        }
+        else {
+            mailboxes[mbox_id].filled = 0;
+        }
+        return -3;
+    }
 
 	Message* slot = mailboxes[mbox_id].messages;
 
@@ -302,7 +380,34 @@ int MboxRecvHelper(int mbox_id, void *msg_ptr) {
 }
 
 int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    if (mailboxes[mbox_id].released == 1) {
+        return -3;
+    }
+    if (mailboxes[mbox_id].filled == 0) {
+        return -1;
+    }
+    if (mailboxes[mbox_id].numSlotsUsed > 0) {
+        Message* slot = mailboxes[mbox_id].messages;
 
+        if (strlen(slot->text) > msg_max_size) {
+            return -1;
+        }
+
+        strcpy(msg_ptr, slot->text);
+        slot->filled = 0;
+        mailboxes[mbox_id].messages = slot->nextMessage;
+        mailboxes[mbox_id].numSlotsUsed -= 1;
+
+        // Unblock process at the head of producer queue after receiving msg
+        if (mailboxes[mbox_id].producers != NULL) {
+            unblockProc(mailboxes[mbox_id].producers->pid);
+            mailboxes[mbox_id].producers = mailboxes[mbox_id].producers->nextInQueue;
+        }
+
+    }
+    else {
+        return -2;
+    }
 }
 
 void waitDevice(int type, int unit, int *status) {
