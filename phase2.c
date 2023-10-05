@@ -194,6 +194,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
         // Unblock process at head of consumer queue
         if (mailboxes[mbox_id].consumers != NULL) {
             unblockProc(mailboxes[mbox_id].consumers->pid);
+            mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
         }
         return 0;
     }
@@ -262,6 +263,7 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
         // Unblock process at the head of producer queue after receiving msg
         if (mailboxes[mbox_id].producers != NULL) {
             unblockProc(mailboxes[mbox_id].producers->pid);
+            mailboxes[mbox_id].producers = mailboxes[mbox_id].producers->nextInQueue;
         }
     }
     else {
