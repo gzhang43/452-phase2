@@ -9,8 +9,6 @@ void termHandler(int dev, void *arg);
 
 typedef struct PCB {
     int pid;
-    char name[MAXNAME];
-    int priority;
     int isBlocked;
     struct PCB* nextInQueue;
     int filled;
@@ -112,7 +110,7 @@ int getNextSlot() {
         USLOSS_Halt(1);
     }              
     int nextSlot = lastAssignedSlot + 1;
-    while (mailboxes[nextSlot % MAXMBOX].filled == 1) {
+    while (mailSlots[nextSlot % MAXSLOTS].filled == 1) {
         nextSlot++;  
     }              
     return nextSlot % MAXSLOTS;
@@ -150,7 +148,7 @@ int MboxRelease(int mbox_id) {
 
 void addMessageToMailbox(struct Message* slot, struct Message* messages) {
     struct Message* temp = messages;
-    while (messages->nextMessage != NULL) {
+    while (temp->nextMessage != NULL) {
         temp = temp->nextMessage;
     }
     temp->nextMessage = slot;
@@ -182,6 +180,8 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
             mailboxes[mbox_id].consumerQueued == 0) {
         Message* slot = &mailSlots[getNextSlot()];
         strcpy(slot->text, msg_ptr);
+        slot->filled = 1;
+        lastAssignedSlot++;
 
         if (mailboxes[mbox_id].messages == NULL) {
             mailboxes[mbox_id].messages = slot;
@@ -191,12 +191,14 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
         }
 	mailboxes[mbox_id].numSlotsUsed += 1;
 
+        // Unblock process at head of consumer queue
         if (mailboxes[mbox_id].consumers != NULL) {
             unblockProc(mailboxes[mbox_id].consumers->pid);
         }
         return 0;
     }
     else {
+        shadowProcessTable[getpid() % MAXPROC].pid = getpid();
         if (mailboxes[mbox_id].producers == NULL) {
             mailboxes[mbox_id].producers = &shadowProcessTable[getpid() % 
                 MAXPROC];
@@ -205,7 +207,27 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
             addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].producers);
         }
         blockMe(13);
-        // TODO: Send message once unblocked
+
+        // Write message to slot once unblocked and unblock next producer if
+        // applicable
+        Message* slot = &mailSlots[getNextSlot()];
+        strcpy(slot->text, msg_ptr); 
+        slot->filled = 1;
+        lastAssignedSlot++;
+
+        if (mailboxes[mbox_id].messages == NULL) {
+            mailboxes[mbox_id].messages = slot;
+        }
+        else {
+            addMessageToMailbox(slot, mailboxes[mbox_id].messages);
+        }
+        mailboxes[mbox_id].numSlotsUsed += 1;
+
+        if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots &&
+                mailboxes[mbox_id].producerQueued == 1) {
+            unblockProc(mailboxes[mbox_id].producers->pid);
+        }
+        return 0;
     }
 }
 
@@ -233,11 +255,17 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 	}
 	
         strcpy(msg_ptr, slot->text);
+        slot->filled = 0;
 	mailboxes[mbox_id].messages = slot->nextMessage;
 	mailboxes[mbox_id].numSlotsUsed -= 1;
-        // TODO: unblock process at the head of producer queue
+
+        // Unblock process at the head of producer queue after receiving msg
+        if (mailboxes[mbox_id].producers != NULL) {
+            unblockProc(mailboxes[mbox_id].producers->pid);
+        }
     }
     else {
+        shadowProcessTable[getpid() % MAXPROC].pid = getpid();
 	if (mailboxes[mbox_id].consumers == NULL) {
             mailboxes[mbox_id].consumers = &shadowProcessTable[getpid() % 
                 MAXPROC];
@@ -252,8 +280,10 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 	if (strlen(slot->text) > msg_max_size) {
 	    return -1;
 	}
-	
+
+        // Receive message and unblock next consumer if applicable	
         strcpy(msg_ptr, slot->text);
+        slot->filled = 0;
 	mailboxes[mbox_id].messages = slot->nextMessage;
 	mailboxes[mbox_id].numSlotsUsed -= 1;
 
