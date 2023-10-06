@@ -125,6 +125,10 @@ int mailboxAvail() {
 }
 
 int MboxCreate(int slots, int slot_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     if (slots < 0 || slots > MAXSLOTS || slot_size < 0 || 
             slot_size > MAX_MESSAGE || !mailboxAvail()) {
         return -1;
@@ -143,6 +147,10 @@ int MboxCreate(int slots, int slot_size) {
 }
 
 int MboxRelease(int mbox_id) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     if (mailboxes[mbox_id].filled == 0) {
         return -1;
     }
@@ -183,6 +191,10 @@ void addProcessToEndOfQueue(int pid, struct PCB* queue) {
 } 
 
 int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     if (mailboxes[mbox_id].released == 1) {
         return -3;
     } 
@@ -207,12 +219,41 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
         else {
             addMessageToMailbox(slot, mailboxes[mbox_id].messages);
         }
-	    mailboxes[mbox_id].numSlotsUsed += 1;
+        mailboxes[mbox_id].numSlotsUsed += 1;
 
         // Unblock process at head of consumer queue
         if (mailboxes[mbox_id].consumers != NULL) {
             unblockProc(mailboxes[mbox_id].consumers->pid);
             mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
+        }
+        return 0;
+    }
+    else if (mailboxes[mbox_id].numSlots == 0) {
+        if (mailboxes[mbox_id].consumers != NULL) {
+            unblockProc(mailboxes[mbox_id].consumers->pid);      
+            mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
+        }
+        else {
+            shadowProcessTable[getpid() % MAXPROC].pid = getpid();
+            if (mailboxes[mbox_id].producers == NULL) {
+                mailboxes[mbox_id].producers = &shadowProcessTable[getpid() % 
+                    MAXPROC];
+            }           
+            else {  
+                addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].producers);
+            }           
+            blockMe(13);
+            
+            if (mailboxes[mbox_id].released == 1) {
+                mailboxes[mbox_id].producers = mailboxes[mbox_id].producers->nextInQueue;
+                if (mailboxes[mbox_id].producers != NULL) {
+                    unblockProc(mailboxes[mbox_id].producers->pid);
+                }
+                else {
+                    mailboxes[mbox_id].filled = 0;
+                }
+                return -3;
+            }
         }
         return 0;
     }
@@ -238,27 +279,24 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
             return -3;
         }
 
-        if (mailboxes[mbox_id].numSlots > 0) {
+        // Write message to slot once unblocked and unblock next producer if
+        // applicable
+        Message* slot = &mailSlots[getNextSlot()];
+        strcpy(slot->text, msg_ptr);
+        slot->filled = 1;
+        lastAssignedSlot++;
 
-            // Write message to slot once unblocked and unblock next producer if
-            // applicable
-            Message* slot = &mailSlots[getNextSlot()];
-            strcpy(slot->text, msg_ptr);
-            slot->filled = 1;
-            lastAssignedSlot++;
+        if (mailboxes[mbox_id].messages == NULL) {
+            mailboxes[mbox_id].messages = slot;
+        }
+        else {
+            addMessageToMailbox(slot, mailboxes[mbox_id].messages);
+        }
+        mailboxes[mbox_id].numSlotsUsed += 1;
 
-            if (mailboxes[mbox_id].messages == NULL) {
-                mailboxes[mbox_id].messages = slot;
-            }
-            else {
-                addMessageToMailbox(slot, mailboxes[mbox_id].messages);
-            }
-            mailboxes[mbox_id].numSlotsUsed += 1;
-
-            if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots &&
-                mailboxes[mbox_id].producerQueued == 1) {
-                unblockProc(mailboxes[mbox_id].producers->pid);
-            }
+        if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots &&
+            mailboxes[mbox_id].producerQueued == 1) {
+            unblockProc(mailboxes[mbox_id].producers->pid);
         }
         return 0;
     }
@@ -269,6 +307,10 @@ int MboxSendHelper(int mbox_id, void *msg_ptr) {
 }
 
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     if (mailboxes[mbox_id].released == 1) {
         return -3;
     }
@@ -308,6 +350,10 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
 }
 
 int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     if (mailboxes[mbox_id].released == 1) {
 	return -3;
     }
@@ -333,27 +379,55 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
             mailboxes[mbox_id].producers = mailboxes[mbox_id].producers->nextInQueue;
         }
     }
-    else {
-        shadowProcessTable[getpid() % MAXPROC].pid = getpid();
-	    if (mailboxes[mbox_id].consumers == NULL) {
-            mailboxes[mbox_id].consumers = &shadowProcessTable[getpid() % 
-                MAXPROC];
-        }
-	    else {
-            addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].consumers);
-        }
-	    blockMe(14);
-
-    if (mailboxes[mbox_id].released == 1) {
-        mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
-        if (mailboxes[mbox_id].consumers != NULL) {
-            unblockProc(mailboxes[mbox_id].consumers->pid);
+    else if (mailboxes[mbox_id].numSlots == 0) {
+        if (mailboxes[mbox_id].producers != NULL) {
+            unblockProc(mailboxes[mbox_id].producers->pid);
+            mailboxes[mbox_id].producers = mailboxes[mbox_id].producers->nextInQueue;
         }
         else {
-            mailboxes[mbox_id].filled = 0;
+            shadowProcessTable[getpid() % MAXPROC].pid = getpid();
+            if (mailboxes[mbox_id].consumers == NULL) {       
+                mailboxes[mbox_id].consumers = &shadowProcessTable[getpid() % 
+                    MAXPROC];                                     
+            }                                                 
+            else {                                            
+                addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].consumers);
+            }                                                 
+            blockMe(14);
+
+            if (mailboxes[mbox_id].released == 1) {
+                mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
+                if (mailboxes[mbox_id].consumers != NULL) {
+                    unblockProc(mailboxes[mbox_id].consumers->pid);
+                }           
+                else {      
+                    mailboxes[mbox_id].filled = 0;
+                }           
+                return -3;  
+            } 
         }
-        return -3;
     }
+    else {
+        shadowProcessTable[getpid() % MAXPROC].pid = getpid();
+	if (mailboxes[mbox_id].consumers == NULL) {
+            mailboxes[mbox_id].consumers = &shadowProcessTable[getpid() % 
+            MAXPROC];
+        }
+	else {
+            addProcessToEndOfQueue(getpid(), mailboxes[mbox_id].consumers);
+        }
+	blockMe(14);
+
+        if (mailboxes[mbox_id].released == 1) {
+            mailboxes[mbox_id].consumers = mailboxes[mbox_id].consumers->nextInQueue;
+            if (mailboxes[mbox_id].consumers != NULL) {
+                unblockProc(mailboxes[mbox_id].consumers->pid);
+            }
+            else {
+                mailboxes[mbox_id].filled = 0;
+            }
+            return -3;
+        }
 
 	Message* slot = mailboxes[mbox_id].messages;
 
@@ -380,6 +454,10 @@ int MboxRecvHelper(int mbox_id, void *msg_ptr) {
 }
 
 int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     if (mailboxes[mbox_id].released == 1) {
         return -3;
     }
