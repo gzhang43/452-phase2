@@ -144,10 +144,14 @@ int getNextMailboxId() {
         USLOSS_Halt(1);
     }
     int nextId = lastAssignedId + 1;
-    while (mailboxes[nextId % MAXMBOX].filled == 1) {
-        nextId++;
+    while (!(mailboxes[nextId % MAXMBOX].filled == 0 || (
+            mailboxes[nextId % MAXMBOX].filled == 1 && 
+            mailboxes[nextId % MAXMBOX].released == 1 &&
+            mailboxes[nextId % MAXMBOX].consumers == NULL &&
+            mailboxes[nextId % MAXMBOX].producers == NULL))) {
+        nextId = (nextId + 1) % MAXMBOX;
     }
-    return nextId % MAXMBOX;
+    return nextId;
 }
 
 int getNextSlot() {
@@ -157,9 +161,9 @@ int getNextSlot() {
     }              
     int nextSlot = lastAssignedSlot + 1;
     while (mailSlots[nextSlot % MAXSLOTS].filled == 1) {
-        nextSlot++;  
+        nextSlot = (nextSlot + 1) % MAXSLOTS;  
     }              
-    return nextSlot % MAXSLOTS;
+    return nextSlot;
 } 
 
 /*
@@ -253,14 +257,12 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
     }
     int savedPsr = disableInterrupts(); 
 
-    if (mailboxes[mbox_id].released == 1 && mailboxes[mbox_id].filled == 1) {
-        return -3;
-    } 
     if (numMailboxSlots >= MAXSLOTS) {
         return -2;
     }
     if (mailboxes[mbox_id].filled == 0 || (msg_size > 0 && msg_ptr == NULL) ||
-            msg_size > mailboxes[mbox_id].slotSize) {
+            msg_size > mailboxes[mbox_id].slotSize ||
+            mailboxes[mbox_id].released == 1) {
         return -1;
     }
 
@@ -406,14 +408,12 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
     }
     int savedPsr = disableInterrupts(); 
 
-    if (mailboxes[mbox_id].released == 1 && mailboxes[mbox_id].filled == 1) {
-        return -3;
-    }
     if (numMailboxSlots >= MAXSLOTS) {
         return -2;
     }
     if (mailboxes[mbox_id].filled == 0 || (msg_size > 0 && msg_ptr == NULL) ||
-        msg_size > mailboxes[mbox_id].slotSize) {
+            msg_size > mailboxes[mbox_id].slotSize ||
+            mailboxes[mbox_id].released == 1) {
         return -1;
     }
 
@@ -459,17 +459,15 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
     }
     int savedPsr = disableInterrupts(); 
 
-    if (mailboxes[mbox_id].released == 1 && mailboxes[mbox_id].filled == 1) {
-	return -3;
-    }
-    if (mailboxes[mbox_id].filled == 0) {
+    if (mailboxes[mbox_id].filled == 0 ||
+            mailboxes[mbox_id].released == 1) {
 	return -1;
     }
     if (mailboxes[mbox_id].numSlotsUsed > 0 && 
             mailboxes[mbox_id].consumerQueued == 0) {
         Message* slot = mailboxes[mbox_id].messages;
 
-	if (strlen(slot->text) > msg_max_size) {
+	if (strlen(slot->text) + 1 > msg_max_size) {
 	    return -1;
 	}
 
@@ -547,7 +545,7 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 
 	Message* slot = mailboxes[mbox_id].messages;
 
-	if (strlen(slot->text) > msg_max_size) {
+	if (strlen(slot->text) + 1 > msg_max_size) {
 	    return -1;
 	}
 
@@ -587,16 +585,14 @@ int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
     }
     int savedPsr = disableInterrupts(); 
 
-    if (mailboxes[mbox_id].released == 1 && mailboxes[mbox_id].filled == 1) {
-        return -3;
-    }
-    if (mailboxes[mbox_id].filled == 0) {
+    if (mailboxes[mbox_id].filled == 0 ||
+            mailboxes[mbox_id].released == 1) {
         return -1;
     }
     if (mailboxes[mbox_id].numSlotsUsed > 0) {
         Message* slot = mailboxes[mbox_id].messages;
 
-        if (strlen(slot->text) > msg_max_size) {
+        if (strlen(slot->text) + 1 > msg_max_size) {
             return -1;
         }
 
