@@ -357,7 +357,7 @@ void writeMessage(int mbox_id, void *msg_ptr) {
     numMailboxSlots++;
 }
 
-int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
+int Send(int mbox_id, void *msg_ptr, int msg_size, int isCond) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
         USLOSS_Halt(1);
@@ -391,7 +391,7 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
         restoreInterrupts(savedPsr);
         return 0;
     }
-    else {
+    else if (!isCond) {
         shadowProcessTable[getpid() % MAXPROC].pid = getpid();
         if (mailboxes[mbox_id].producers == NULL) {
             mailboxes[mbox_id].producers = &shadowProcessTable[getpid() % 
@@ -435,11 +435,22 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
 
         restoreInterrupts(savedPsr);
         return 0;
+    } 
+    else {
+        restoreInterrupts(savedPsr);
+        return -2;
     }
 }
 
-int MboxSendHelper(int mbox_id, void *msg_ptr) {
-
+int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+    int savedPsr = disableInterrupts(); 
+    int retVal = Send(mbox_id, msg_ptr, msg_size, 0);
+    restoreInterrupts(savedPsr);
+    return retVal;
 }
 
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
@@ -448,31 +459,9 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
         USLOSS_Halt(1);
     }
     int savedPsr = disableInterrupts(); 
-
-    if (numMailboxSlots >= MAXSLOTS) {
-        return -2;
-    }
-    if (mailboxes[mbox_id].filled == 0 || (msg_size > 0 && msg_ptr == NULL) ||
-            msg_size > mailboxes[mbox_id].slotSize ||
-            mailboxes[mbox_id].released == 1) {
-        return -1;
-    }
-
-    if (mailboxes[mbox_id].numSlotsUsed < mailboxes[mbox_id].numSlots) {
-        writeMessage(mbox_id, msg_ptr);
-
-        // Unblock process at head of consumer queue
-        if (mailboxes[mbox_id].consumers != NULL && consumerAwake == 0) {
-            consumerAwake = 1;
-            unblockProc(mailboxes[mbox_id].consumers->pid);
-        }
-        restoreInterrupts(savedPsr);
-        return 0;
-    }
-    else {
-        restoreInterrupts(savedPsr);
-        return -2;
-    }
+    int retVal = Send(mbox_id, msg_ptr, msg_size, 1);
+    restoreInterrupts(savedPsr);
+    return retVal;
 }
 
 int readMessage(int mbox_id, void *msg_ptr, int msg_max_size) {
@@ -490,9 +479,10 @@ int readMessage(int mbox_id, void *msg_ptr, int msg_max_size) {
     mailboxes[mbox_id].messages = slot->nextMessage;
     mailboxes[mbox_id].numSlotsUsed -= 1;
     numMailboxSlots--;
+    return 0;
 }
 
-int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+int Recv(int mbox_id, void *msg_ptr, int msg_max_size, int isCond) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
         USLOSS_Halt(1);
@@ -521,7 +511,7 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
             unblockProc(mailboxes[mbox_id].producers->pid);
         }
     }
-    else {
+    else if (!isCond) {
         shadowProcessTable[getpid() % MAXPROC].pid = getpid();
 	if (mailboxes[mbox_id].consumers == NULL) {
             mailboxes[mbox_id].consumers = &shadowProcessTable[getpid() % 
@@ -565,17 +555,29 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
             consumerAwake = 0;
         }	
     }
-    restoreInterrupts(savedPsr);
+    else {
+        restoreInterrupts(savedPsr);
+        return -2;
+    }
 
-    if (mailboxes[mbox_id].numSlots != 0 && msg_max_size != 0 && strlen(msg_ptr) != 0) {
+    restoreInterrupts(savedPsr);
+    if (mailboxes[mbox_id].numSlots != 0 && msg_max_size != 0 
+            && strlen(msg_ptr) != 0) {        
         return strlen(msg_ptr) + 1;
     } else {
         return 0;
     }
 }
 
-int MboxRecvHelper(int mbox_id, void *msg_ptr) {
-
+int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+    int savedPsr = disableInterrupts(); 
+    int retVal = Recv(mbox_id, msg_ptr, msg_max_size, 0);
+    restoreInterrupts(savedPsr);
+    return retVal;
 }
 
 int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
@@ -584,35 +586,7 @@ int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
         USLOSS_Halt(1);
     }
     int savedPsr = disableInterrupts(); 
-
-    if (mailboxes[mbox_id].filled == 0 ||
-            mailboxes[mbox_id].released == 1) {
-        return -1;
-    }
-    if (mailboxes[mbox_id].numSlotsUsed > 0) {
-        Message* slot = mailboxes[mbox_id].messages;
-
-        if (strlen(slot->text) + 1 > msg_max_size) {
-            return -1;
-        }
-
-        strcpy(msg_ptr, slot->text);
-        
-        slot->filled = 0;
-        mailboxes[mbox_id].messages = slot->nextMessage;
-        mailboxes[mbox_id].numSlotsUsed -= 1;
-        numMailboxSlots--;
-
-        // Unblock process at the head of producer queue after receiving msg
-        if (mailboxes[mbox_id].producers != NULL && producerAwake == 0) {
-            producerAwake = 1;
-            unblockProc(mailboxes[mbox_id].producers->pid);
-        }
-        restoreInterrupts(savedPsr);
-        return strlen(msg_ptr) + 1;
-    }
-    else {
-        restoreInterrupts(savedPsr);
-        return -2;
-    }
+    int retVal = Recv(mbox_id, msg_ptr, msg_max_size, 1);
+    restoreInterrupts(savedPsr);
+    return retVal;
 }
