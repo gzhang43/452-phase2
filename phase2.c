@@ -1,12 +1,12 @@
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 #include <usloss.h>
 #include "phase1.h"
 #include "phase2.h"
 
 void diskHandler(int dev, void *arg);
 void termHandler(int dev, void *arg);
+void syscallHandler(int dev, void *arg);
 
 typedef struct PCB {
     int pid;
@@ -36,6 +36,8 @@ typedef struct Mailbox {
     int filled;
 } Mailbox;
 
+void (*systemCallVec[MAXSYSCALLS])(USLOSS_Sysargs *args);
+
 struct Mailbox mailboxes[MAXMBOX];
 struct Message mailSlots[MAXSLOTS]; 
 struct PCB shadowProcessTable[MAXPROC+1];
@@ -49,8 +51,6 @@ int consumerAwake; // Use so only one consumer can be awake at a time
 int producerAwake;
 
 int timeOfLastClockMessage;
-int clockMessageSentBefore;
-int processBlockedByWaitDevice;
 
 /*
 Disables interrupts in the simulation by setting the corresponding bit
@@ -93,6 +93,13 @@ void enableInterrupts() {
     } 
 }
 
+void nullsys(USLOSS_Sysargs *args) {
+    unsigned int PSR = USLOSS_PsrGet();
+    USLOSS_Console("nullsys(): Program called an unimplemented syscall.  ");
+    USLOSS_Console("syscall no: %d   PSR: 0x0%d\n", args->number, PSR);
+    USLOSS_Halt(1);
+}
+
 void phase2_init(void) {
     if (USLOSS_PsrGet() % 2 == 0) {
 	USLOSS_Console("Process is not in kernel mode.\n");
@@ -101,6 +108,7 @@ void phase2_init(void) {
 
     USLOSS_IntVec[USLOSS_DISK_INT] = diskHandler;    
     USLOSS_IntVec[USLOSS_TERM_INT] = termHandler;    
+    USLOSS_IntVec[USLOSS_SYSCALL_INT] = syscallHandler;
 
     for (int i = 0; i < MAXPROC; i++) {
 	shadowProcessTable[i].filled = 0;
@@ -111,6 +119,9 @@ void phase2_init(void) {
     for (int i = 0; i < MAXSLOTS; i++) {
 	mailSlots[i].filled = 0;
     }
+    for (int i = 0; i < MAXSYSCALLS; i++) {
+        systemCallVec[i] = nullsys;   
+    }
 
     numMailboxes = 0;
     lastAssignedId = -1;
@@ -118,8 +129,7 @@ void phase2_init(void) {
     consumerAwake = 0;
     producerAwake = 0;
 
-    clockMessageSentBefore = 0;
-    processBlockedByWaitDevice = 0;
+    timeOfLastClockMessage = currentTime();
  
     MboxCreate(1, 4); 
     MboxCreate(1, 4); 
@@ -127,7 +137,7 @@ void phase2_init(void) {
     MboxCreate(1, 4); 
     MboxCreate(1, 4); 
     MboxCreate(1, 4); 
-    MboxCreate(1, 4); 
+    MboxCreate(1, 4);  
 }
 
 void phase2_start_service_processes(void) {
@@ -135,26 +145,78 @@ void phase2_start_service_processes(void) {
 }
 
 int phase2_check_io(void) {
-    return processBlockedByWaitDevice;
+    for (int i = 0; i < 7; i++) {
+        if (mailboxes[i].consumers != NULL) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 void phase2_clockHandler(void) {
     int status;
 
-    if (clockMessageSentBefore == 0) {
-        clockMessageSentBefore = 1;
+    if (currentTime() - timeOfLastClockMessage >= 100000) {
         timeOfLastClockMessage = currentTime();
-
-        USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &status);
+        int ret = USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &status); 
         MboxCondSend(0, (void*)(&status), 4);
+    } 
+}
+
+void waitDevice(int type, int unit, int *status) {
+    if (type == USLOSS_CLOCK_DEV) {
+        if (unit != 0) {
+            USLOSS_Console("ERROR\n");
+            USLOSS_Halt(1);
+        }
     }
-    else {
-        if (currentTime() - timeOfLastClockMessage >= 100) {
-            timeOfLastClockMessage = currentTime();
-            USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &status); 
-            MboxCondSend(0, (void*)(&status), 4);
-        } 
-    }    
+    else if (type == USLOSS_TERM_DEV) {
+        if (unit < 0 || unit > 3) {
+            USLOSS_Console("ERROR\n");
+            USLOSS_Halt(1);
+        }
+        unit = unit + 1;
+    }
+    else if (type == USLOSS_DISK_DEV) {
+        if (unit != 0 && unit != 1) {
+            USLOSS_Console("ERROR\n");
+            USLOSS_Halt(1);
+        }
+        unit = unit + 5;
+    }
+    MboxRecv(unit, status, sizeof(int));
+}
+
+void wakeupByDevice(int type, int unit, int status) {
+
+}
+
+void termHandler(int dev, void *arg) {
+    int status;
+    int unitNo = (int)(long)arg;
+    
+    int ret = USLOSS_DeviceInput(USLOSS_TERM_DEV, unitNo, &status);
+    MboxCondSend(1 + unitNo, (void*)(&status), 4);
+}
+
+void diskHandler(int dev, void *arg) {
+    int status;
+    int unitNo = (int)(long)arg;
+    
+    int ret = USLOSS_DeviceInput(USLOSS_DISK_DEV, unitNo, &status);
+    MboxCondSend(5 + unitNo, (void*)(&status), 4);
+}
+
+void syscallHandler(int dev, void *arg) {
+    USLOSS_Sysargs* call = (USLOSS_Sysargs*)arg;
+    int callNo = call->number;
+
+    if (callNo >= MAXSYSCALLS || callNo < 0) {
+        USLOSS_Console("syscallHandler(): Invalid syscall number %d\n", callNo);
+        USLOSS_Halt(1);
+    }
+    
+    (*(systemCallVec[callNo]))(call);
 }
 
 /*
@@ -218,8 +280,8 @@ int MboxCreate(int slots, int slot_size) {
 
     lastAssignedId = id;
     numMailboxes++;
-    restoreInterrupts(savedPsr);
 
+    restoreInterrupts(savedPsr);
     return id;   
 }
 
@@ -444,7 +506,7 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
         Message* slot = &mailSlots[getNextSlot()];
         
         if (msg_ptr != NULL) {
-            strcpy(slot->text, msg_ptr);
+            memcpy(slot->text, msg_ptr, msg_size);
         }
         else {
             slot->text[0] = '\0';
@@ -495,7 +557,7 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 	    return -1;
 	}
         if (msg_max_size != 0) {
-            strcpy(msg_ptr, slot->text);
+            memcpy(msg_ptr, slot->text, msg_max_size);
         }
 
         slot->filled = 0;
@@ -568,6 +630,7 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
             return -3;
         }
 
+        // Receive message and unblock next consumer if applicable	
 	Message* slot = mailboxes[mbox_id].messages;
 
 	if (strlen(slot->text) + 1 > msg_max_size && 
@@ -575,12 +638,9 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 	    return -1;
 	}
         if (msg_max_size != 0) {
-            strcpy(msg_ptr, slot->text);
+            memcpy(msg_ptr, slot->text, msg_max_size);
         }
 
-        // Receive message and unblock next consumer if applicable	
-        strcpy(msg_ptr, slot->text);
-        
         slot->filled = 0;
 	mailboxes[mbox_id].messages = slot->nextMessage;
 	mailboxes[mbox_id].numSlotsUsed -= 1;
@@ -649,32 +709,3 @@ int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
         return -2;
     }
 }
-
-void waitDevice(int type, int unit, int *status) {
-    char statusStr[4];
-    if (type == USLOSS_CLOCK_DEV) {
-        if (unit != 0) {
-            USLOSS_Console("ERROR\n");
-            USLOSS_Halt(1);
-        }
-        processBlockedByWaitDevice = 1;
-        MboxRecv(unit, statusStr, 4);
-        status = (int*)(&statusStr);
-        processBlockedByWaitDevice = 0;
-    }
-}
-
-void wakeupByDevice(int type, int unit, int status) {
-
-}
-
-void diskHandler(int dev, void *arg) {
-    int unitNo = (int)(long)arg;
-}
-
-void termHandler(int dev, void *arg) {
-    int unitNo = (int)(long)arg;
-}
-
-
-
