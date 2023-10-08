@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 #include <usloss.h>
 #include "phase1.h"
 #include "phase2.h"
@@ -46,6 +47,10 @@ int lastAssignedSlot;
 
 int consumerAwake; // Use so only one consumer can be awake at a time
 int producerAwake;
+
+int timeOfLastClockMessage;
+int clockMessageSentBefore;
+int processBlockedByWaitDevice;
 
 /*
 Disables interrupts in the simulation by setting the corresponding bit
@@ -112,6 +117,9 @@ void phase2_init(void) {
     lastAssignedSlot = -1;
     consumerAwake = 0;
     producerAwake = 0;
+
+    clockMessageSentBefore = 0;
+    processBlockedByWaitDevice = 0;
  
     MboxCreate(1, 4); 
     MboxCreate(1, 4); 
@@ -127,11 +135,26 @@ void phase2_start_service_processes(void) {
 }
 
 int phase2_check_io(void) {
-
+    return processBlockedByWaitDevice;
 }
 
 void phase2_clockHandler(void) {
+    int status;
 
+    if (clockMessageSentBefore == 0) {
+        clockMessageSentBefore = 1;
+        timeOfLastClockMessage = currentTime();
+
+        USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &status);
+        MboxCondSend(0, (void*)(&status), 4);
+    }
+    else {
+        if (currentTime() - timeOfLastClockMessage >= 100) {
+            timeOfLastClockMessage = currentTime();
+            USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &status); 
+            MboxCondSend(0, (void*)(&status), 4);
+        } 
+    }    
 }
 
 /*
@@ -467,12 +490,14 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
             mailboxes[mbox_id].consumerQueued == 0) {
         Message* slot = mailboxes[mbox_id].messages;
 
-	if (strlen(slot->text) + 1 > msg_max_size) {
+	if (strlen(slot->text) + 1 > msg_max_size && 
+                !(mailboxes[mbox_id].slotSize == 0 && msg_max_size == 0)) {
 	    return -1;
 	}
+        if (msg_max_size != 0) {
+            strcpy(msg_ptr, slot->text);
+        }
 
-        strcpy(msg_ptr, slot->text);
-        
         slot->filled = 0;
 	mailboxes[mbox_id].messages = slot->nextMessage;
 	mailboxes[mbox_id].numSlotsUsed -= 1;
@@ -545,9 +570,13 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 
 	Message* slot = mailboxes[mbox_id].messages;
 
-	if (strlen(slot->text) + 1 > msg_max_size) {
+	if (strlen(slot->text) + 1 > msg_max_size && 
+                !(mailboxes[mbox_id].slotSize == 0 && msg_max_size == 0)) {
 	    return -1;
 	}
+        if (msg_max_size != 0) {
+            strcpy(msg_ptr, slot->text);
+        }
 
         // Receive message and unblock next consumer if applicable	
         strcpy(msg_ptr, slot->text);
@@ -571,7 +600,11 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
         }	
     }
     restoreInterrupts(savedPsr);
-    return strlen(msg_ptr) + 1;
+    if (msg_max_size != 0 && strlen(msg_ptr) != 0) {
+        return strlen(msg_ptr) + 1;
+    } else {
+        return 0;
+    }
 }
 
 int MboxRecvHelper(int mbox_id, void *msg_ptr) {
@@ -618,7 +651,17 @@ int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
 }
 
 void waitDevice(int type, int unit, int *status) {
-
+    char statusStr[4];
+    if (type == USLOSS_CLOCK_DEV) {
+        if (unit != 0) {
+            USLOSS_Console("ERROR\n");
+            USLOSS_Halt(1);
+        }
+        processBlockedByWaitDevice = 1;
+        MboxRecv(unit, statusStr, 4);
+        status = (int*)(&statusStr);
+        processBlockedByWaitDevice = 0;
+    }
 }
 
 void wakeupByDevice(int type, int unit, int status) {
