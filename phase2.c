@@ -1,3 +1,15 @@
+/*
+* Assignment: Phase 2
+* Group: Grace Zhang and Ellie Martin
+* Course: CSC 452 (Operating Systems)
+* Instructors: Russell Lewis and Ben Dicken
+* Due Date: 10/11/23
+*
+* Description: Code for our operating systems kernel that implements
+* sending and receiving messages between processes thorugh the use of
+* mailboxes.
+*/
+
 #include <stdio.h>
 #include <string.h>
 #include <usloss.h>
