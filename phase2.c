@@ -157,6 +157,10 @@ void phase2_start_service_processes(void) {
 }
 
 int phase2_check_io(void) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     for (int i = 0; i < 7; i++) {
         if (mailboxes[i].consumers != NULL) {
             return 1;
