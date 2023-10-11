@@ -166,6 +166,11 @@ int phase2_check_io(void) {
 }
 
 void phase2_clockHandler(void) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+
     int status;
 
     if (currentTime() - timeOfLastClockMessage >= 100000) {
@@ -176,6 +181,11 @@ void phase2_clockHandler(void) {
 }
 
 void waitDevice(int type, int unit, int *status) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+
     if (type == USLOSS_CLOCK_DEV) {
         if (unit != 0) {
             USLOSS_Console("ERROR\n");
