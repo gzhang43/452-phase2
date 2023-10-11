@@ -6,12 +6,14 @@ Instructors: Russell Lewis and Ben Dicken
 Due Date: 10/11/23
 
 Description: Code for Phase 2 of our operating systems kernel that implements
-methods of creating, destroying, sending and receiving on mailboxes that can be 
-used by processes to block, receive interrupts, and as mutexes. The program also
-has mailboxes created for handling interrupts from disks, terminals, and the
-clock handler, and different processes can block on these mailboxes to wait for
-interrupts in the form of a message being sent. A vector for syscalls is also 
-created, and the syscall handler indexes into this to call the correct syscall.
+sending and receiving messages between processes thorugh the use of mailboxes. 
+Contains methods to create and destroy mailboxes, and for sending and receiving 
+messages from mailboxes that can also be used by processes to block, receive 
+interrupts, and as mutexes. The program also has mailboxes created for handling 
+interrupts from disks, terminals, and the clock handler, and different processes 
+can block on these mailboxes to wait for interrupts in the form of a message being 
+sent. A vector for syscalls is also created, and the syscall handler indexes into 
+this to call the correct syscall.
 
 To compile with testcases, run the Makefile. 
 */
@@ -185,6 +187,10 @@ If yes, then return 1 because processes are waiting on I/O. If not,
 then return 0.
 */
 int phase2_check_io(void) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
     for (int i = 0; i < 7; i++) {
         if (mailboxes[i].consumers != NULL) {
             return 1;
@@ -198,6 +204,11 @@ Clock handler called by phase 1. Checks if the last message sent to the
 clock mailbox was over 100 ms ago, and sends another message if yes.
 */
 void phase2_clockHandler(void) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+
     int status;
     int currTime = currentTime();
     if (currTime - timeOfLastClockMessage >= 100000) {
@@ -218,6 +229,11 @@ Parameters:
              arrives
 */
 void waitDevice(int type, int unit, int *status) {
+    if (USLOSS_PsrGet() % 2 == 0) {
+        USLOSS_Console("Process is not in kernel mode.\n");
+        USLOSS_Halt(1);
+    }
+
     if (type == USLOSS_CLOCK_DEV) {
         if (unit != 0) {
             USLOSS_Console("ERROR\n");
