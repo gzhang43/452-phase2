@@ -1,3 +1,21 @@
+/*
+Assignment: Phase 2
+Group: Grace Zhang and Ellie Martin
+Course: CSC 452 (Operating Systems)
+Instructors: Russell Lewis and Ben Dicken
+Due Date: 10/11/23
+
+Description: Code for Phase 2 of our operating systems kernel that implements
+methods of creating, destroying, sending and receiving on mailboxes that can be 
+used by processes to block, receive interrupts, and as mutexes. The program also
+has mailboxes created for handling interrupts from disks, terminals, and the
+clock handler, and different processes can block on these mailboxes to wait for
+interrupts in the form of a message being sent. A vector for syscalls is also 
+created, and the syscall handler indexes into this to call the correct syscall.
+
+To compile with testcases, run the Makefile. 
+*/
+
 #include <stdio.h>
 #include <string.h>
 #include <usloss.h>
@@ -42,15 +60,15 @@ struct Mailbox mailboxes[MAXMBOX];
 struct Message mailSlots[MAXSLOTS]; 
 struct PCB shadowProcessTable[MAXPROC+1];
 
-int numMailboxes;
-int numMailboxSlots;
-int lastAssignedId;
-int lastAssignedSlot;
+int numMailboxes;     // The number of mailboxes being used currently
+int numMailboxSlots;  // The number of slots being used currently
+int lastAssignedId;   // The last assigned index for mailboxes
+int lastAssignedSlot; // The last assigned index for slots
 
 int consumerAwake; // Use so only one consumer can be awake at a time
 int producerAwake;
 
-int timeOfLastClockMessage;
+int timeOfLastClockMessage; // The time the last clock msg was sent
 
 /*
 Disables interrupts in the simulation by setting the corresponding bit
@@ -93,6 +111,13 @@ void enableInterrupts() {
     } 
 }
 
+/*
+A function called when a syscall is not implemented yet. The syscall
+vector is initialized to contain nullsys function pointers.
+
+Parameters:
+    args - argument containing the syscall number and other fields
+*/
 void nullsys(USLOSS_Sysargs *args) {
     unsigned int PSR = USLOSS_PsrGet();
     USLOSS_Console("nullsys(): Program called an unimplemented syscall.  ");
@@ -100,6 +125,12 @@ void nullsys(USLOSS_Sysargs *args) {
     USLOSS_Halt(1);
 }
 
+/*
+Initializes the data structures for phase2, such as the mailbox and
+slot arrays and the shadow process table. Also initializes the
+interrupt handlers for disks, terminals, and syscalls, and creates
+the mailboxes for the clock and devices.
+*/
 void phase2_init(void) {
     if (USLOSS_PsrGet() % 2 == 0) {
 	USLOSS_Console("Process is not in kernel mode.\n");
@@ -140,10 +171,19 @@ void phase2_init(void) {
     MboxCreate(1, 4);  
 }
 
+/*
+Starts the service processes for phase2.
+*/
 void phase2_start_service_processes(void) {
 
 }
 
+/*
+Checks if any processes are blocked on the device or clock mailboxes.
+
+If yes, then return 1 because processes are waiting on I/O. If not,
+then return 0.
+*/
 int phase2_check_io(void) {
     for (int i = 0; i < 7; i++) {
         if (mailboxes[i].consumers != NULL) {
@@ -153,16 +193,30 @@ int phase2_check_io(void) {
     return 0;
 }
 
+/*
+Clock handler called by phase 1. Checks if the last message sent to the
+clock mailbox was over 100 ms ago, and sends another message if yes.
+*/
 void phase2_clockHandler(void) {
     int status;
-
-    if (currentTime() - timeOfLastClockMessage >= 100000) {
-        timeOfLastClockMessage = currentTime();
+    int currTime = currentTime();
+    if (currTime - timeOfLastClockMessage >= 100000) {
         int ret = USLOSS_DeviceInput(USLOSS_CLOCK_DEV, 0, &status); 
+        timeOfLastClockMessage = currTime;
         MboxCondSend(0, (void*)(&status), 4);
     } 
 }
 
+/*
+Has the current process wait for a device to send an interrupt by
+calling recv on its mailbox.
+
+Parameters:
+    type - the type of device (disk, terminal, or clock)
+    unit - the unit number of the device
+    status - out pointer to deliver the device status once an interrupt
+             arrives
+*/
 void waitDevice(int type, int unit, int *status) {
     if (type == USLOSS_CLOCK_DEV) {
         if (unit != 0) {
@@ -187,10 +241,13 @@ void waitDevice(int type, int unit, int *status) {
     MboxRecv(unit, status, sizeof(int));
 }
 
-void wakeupByDevice(int type, int unit, int status) {
+/*
+Interrupt handler for terminals that sends the status of the terminal
+to its mailbox.
 
-}
-
+Parameters:
+    arg - the unit number of the terminal
+*/
 void termHandler(int dev, void *arg) {
     int status;
     int unitNo = (int)(long)arg;
@@ -199,6 +256,13 @@ void termHandler(int dev, void *arg) {
     MboxCondSend(1 + unitNo, (void*)(&status), 4);
 }
 
+/*
+The interrupt handler for disks that sends the status of a terminal to
+its mailbox. 
+
+Parameters:
+    arg - the unit number of the disk
+*/
 void diskHandler(int dev, void *arg) {
     int status;
     int unitNo = (int)(long)arg;
@@ -207,6 +271,13 @@ void diskHandler(int dev, void *arg) {
     MboxCondSend(5 + unitNo, (void*)(&status), 4);
 }
 
+/*
+An interrupt handler for syscalls that indexes into the syscall vector and
+calls the function located at the index.
+
+Parameters:
+    arg - contains the arguments for the syscall
+*/
 void syscallHandler(int dev, void *arg) {
     USLOSS_Sysargs* call = (USLOSS_Sysargs*)arg;
     int callNo = call->number;
@@ -239,6 +310,10 @@ int getNextMailboxId() {
     return nextId;
 }
 
+/*
+Returns the next available slot id. The id is the index into the array of
+mailbox slots, and can be reused.
+*/
 int getNextSlot() {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -259,6 +334,16 @@ int mailboxAvail() {
     return numMailboxes < MAXMBOX;
 }
 
+/*
+Creates a mailbox with the given number of slots and slot size.
+
+Parameters:
+    slots - the number of slots to hold messages the mailbox should have
+    slot_size - the largest message size that can be sent through this
+                mailbox
+
+Returns: the id of the allocated mailbox, or -1 in case of an error.
+*/
 int MboxCreate(int slots, int slot_size) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -285,6 +370,17 @@ int MboxCreate(int slots, int slot_size) {
     return id;   
 }
 
+/*
+Destroys the mailbox with the given mbox_id. Frees all the slots of the
+mailbox and starts process to flush all producers and consumers of the 
+mailbox.
+
+Parameters:
+    mbox_id - the id of the mailbox to release
+
+Returns: 0 if release was successful, and -1 if the id is not currently
+in use.
+*/
 int MboxRelease(int mbox_id) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -317,6 +413,13 @@ int MboxRelease(int mbox_id) {
     return 0;
 }
 
+/*
+Adds a message to the end of the given list of messages.
+
+Parameters:
+    slot - the Message instance to add
+    messages - the list of messages to add to
+*/
 void addMessageToMailbox(struct Message* slot, struct Message* messages) {
     struct Message* temp = messages;
     while (temp->nextMessage != NULL) {
@@ -325,6 +428,13 @@ void addMessageToMailbox(struct Message* slot, struct Message* messages) {
     temp->nextMessage = slot;
 }
 
+/*
+Adds the process with the given pid to the end of the given queue.
+
+Parameters:
+    pid - the pid of the process to add
+    queue - the queue to add the process to
+*/
 void addProcessToEndOfQueue(int pid, struct PCB* queue) {
     struct PCB *process = &shadowProcessTable[pid % MAXPROC];
    
@@ -335,6 +445,14 @@ void addProcessToEndOfQueue(int pid, struct PCB* queue) {
     temp->nextInQueue = process;
 } 
 
+/*
+Writes a message to the given mailbox. Requires that the mailbox has
+sufficient space for a message.
+
+Parameters:
+    mbox_id - the id of the mailbox to write to
+    msg_ptr - pointer to the message to write
+*/
 void writeMessage(int mbox_id, void *msg_ptr) {
     Message* slot = &mailSlots[getNextSlot()];
        
@@ -357,6 +475,20 @@ void writeMessage(int mbox_id, void *msg_ptr) {
     numMailboxSlots++;
 }
 
+/*
+Helper function for sending a message to a mailbox. Will block if mailbox
+does not have sufficient space depending on the value of isCond.
+
+Parameters:
+    mbox_id - the id of the mailbox to send a message to
+    msg_ptr - pointer to the message to send
+    msg_size - the length of the message to send
+    isCond - 0 if function should block, and 1 if send is conditional
+
+Returns: -3 if the mailbox was released, -2 if the mailbox has run out of
+slots, -1 if illegal argument values were given, and 0 if send was
+successful.
+*/
 int Send(int mbox_id, void *msg_ptr, int msg_size, int isCond) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -442,6 +574,20 @@ int Send(int mbox_id, void *msg_ptr, int msg_size, int isCond) {
     }
 }
 
+/*
+Sends a message to the given mailbox, and blocks the process if the mailbox 
+is full. The message will be sent eventually once the mailbox has open slots,
+depending on where the process is in the producer queue.
+
+Parameters:
+    mbox_id - the id of the mailbox to send a message to
+    msg_ptr - pointer to the message to send
+    msg_size - the length of the message to send
+
+Returns: -3 if the mailbox was released, -2 if the system has run out of
+slots, -1 if illegal argument values were given, and 0 if send was
+successful.
+*/
 int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -453,6 +599,19 @@ int MboxSend(int mbox_id, void *msg_ptr, int msg_size) {
     return retVal;
 }
 
+/*
+Sends a message to the given mailbox, but does not block in the case the
+mailbox is full.
+
+Parameters:
+    mbox_id - the id of the mailbox to send a message to
+    msg_ptr - pointer to the message to send
+    msg_size - the length of the message to send
+
+Returns: -3 if the mailbox was released, -2 if the system has run out of
+slots, -1 if illegal argument values were given, and 0 if send was
+successful.
+*/
 int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -464,6 +623,16 @@ int MboxCondSend(int mbox_id, void *msg_ptr, int msg_size) {
     return retVal;
 }
 
+/*
+Reads the first message from the given mailbox.
+
+Parameters:
+    mbox_id - the id of the mailbox to read from
+    msg_ptr - the out pointer to hold the message read
+    msg_max_size - the size of the buffer; can receive up to this size
+
+Returns: -1 if illegal argument values were given, and 0 otherwise.
+*/
 int readMessage(int mbox_id, void *msg_ptr, int msg_max_size) {
     Message* slot = mailboxes[mbox_id].messages;
 
@@ -482,6 +651,20 @@ int readMessage(int mbox_id, void *msg_ptr, int msg_max_size) {
     return 0;
 }
 
+/*
+Helper function to receive message from a mailbox. Blocks upon encountering an 
+empty mailbox depending on value of isCond. If consumer is blocked, then the
+process is added to the consumer queue of the mailbox, and a message is received
+when available.
+
+Parameters:
+    mbox_id - the id of the mailbox to receive from
+    msg_ptr - pointer to buffer to hold received message
+    msg_max_size - the size of the buffer; can receive up to this size
+
+Returns: -3 if mailbox was released, -1 if illegal values were given as arguments,
+and the size of the message received otherwise.
+*/
 int Recv(int mbox_id, void *msg_ptr, int msg_max_size, int isCond) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -569,6 +752,19 @@ int Recv(int mbox_id, void *msg_ptr, int msg_max_size, int isCond) {
     }
 }
 
+/*
+Function to receive message from a mailbox. Blocks upon encountering an 
+empty mailbox. If consumer is blocked, then the process is added to the 
+consumer queue of the mailbox, and a message is received when available.
+
+Parameters:
+    mbox_id - the id of the mailbox to receive from
+    msg_ptr - pointer to buffer to hold received message
+    msg_max_size - the size of the buffer; can receive up to this size
+
+Returns: -3 if mailbox was released, -1 if illegal values were given as arguments,
+and the size of the message received otherwise.
+*/
 int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
@@ -580,6 +776,18 @@ int MboxRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
     return retVal;
 }
 
+/*
+Function to receive message from a mailbox that does not block when a message is
+not available.
+
+Parameters:
+    mbox_id - the id of the mailbox to receive from
+    msg_ptr - pointer to buffer to hold received message
+    msg_max_size - the size of the buffer; can receive up to this size
+
+Returns: -3 if mailbox was released, -1 if illegal values were given as arguments,
+and the size of the message received otherwise.
+*/
 int MboxCondRecv(int mbox_id, void *msg_ptr, int msg_max_size) {
     if (USLOSS_PsrGet() % 2 == 0) {
         USLOSS_Console("Process is not in kernel mode.\n");
